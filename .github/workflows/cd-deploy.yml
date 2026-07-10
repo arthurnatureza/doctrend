@@ -1,0 +1,134 @@
+# .github/workflows/cd-deploy.yml
+# Dispara automaticamente após merge na main.
+# Faz deploy na VPS Hostinger via SSH + Rsync com mínimo downtime.
+
+name: CD — Deploy Automático VPS
+
+on:
+  push:
+    branches:
+      - main       # Só roda quando um PR é mergeado na main
+
+jobs:
+  deploy:
+    name: Deploy para VPS Hostinger
+    runs-on: ubuntu-latest
+
+    steps:
+      # 1. Checkout com histórico completo (necessário para rsync detectar mudanças)
+      - name: Checkout do código
+        uses: actions/checkout@v4
+
+      # 2. Configura chave SSH para acesso à VPS
+      - name: Configurar SSH
+        uses: webfactory/ssh-agent@v0.9.0
+        with:
+          ssh-private-key: ${{ secrets.VPS_SSH_PRIVATE_KEY }}
+
+      # 3. Adiciona a VPS como host conhecido (evita prompt interativo)
+      - name: Adicionar VPS ao known_hosts
+        run: |
+          mkdir -p ~/.ssh
+          ssh-keyscan -H ${{ secrets.VPS_HOST }} >> ~/.ssh/known_hosts
+
+      # 4. Sincroniza arquivos com a VPS via Rsync
+      #    --delete: remove arquivos que não existem mais no repo
+      #    --exclude: não sobrescreve dados persistentes nem arquivos sensíveis
+      - name: Sincronizar código com VPS (Rsync)
+        run: |
+          rsync -avz --delete \
+            --exclude='.git/' \
+            --exclude='.github/' \
+            --exclude='*.env' \
+            --exclude='.env*' \
+            --exclude='data/' \
+            --exclude='*.db' \
+            --exclude='*.sqlite' \
+            ./ ${{ secrets.VPS_USER }}@${{ secrets.VPS_HOST }}:${{ secrets.VPS_APP_PATH }}/
+
+      # 5. Deploy inteligente com zero downtime
+      #    Lógica:
+      #    - Detecta quais serviços tiveram arquivos alterados neste push
+      #    - Reinicia apenas o(s) container(s) necessário(s)
+      #    - Frontend usa volume → mudanças em arquivos estáticos refletem SEM reiniciar container
+      #    - API/Backend precisa de rebuild se código Python mudou
+      - name: Deploy inteligente (zero downtime)
+        run: |
+          ssh ${{ secrets.VPS_USER }}@${{ secrets.VPS_HOST }} << 'ENDSSH'
+            set -e
+            cd ${{ secrets.VPS_APP_PATH }}
+
+            echo "=== Carregando variáveis de ambiente ==="
+            # O arquivo .env deve existir na VPS (não é versionado no Git)
+            # Ele é criado manualmente uma única vez conforme configuracao-vps.md
+            if [ -f .env ]; then
+              export $(grep -v '^#' .env | xargs)
+            fi
+
+            echo "=== Detectando mudanças no último commit ==="
+            CHANGED=$(git log -1 --name-only --pretty=format: HEAD 2>/dev/null || echo "")
+
+            # Verifica se a API mudou
+            API_CHANGED=false
+            if echo "$CHANGED" | grep -qE '^api/'; then
+              API_CHANGED=true
+              echo "→ Mudanças detectadas na API"
+            fi
+
+            # Verifica se o Frontend mudou
+            FRONT_CHANGED=false
+            if echo "$CHANGED" | grep -qE '^frontend/'; then
+              FRONT_CHANGED=true
+              echo "→ Mudanças detectadas no Frontend"
+            fi
+
+            # Verifica se o docker-compose ou Dockerfiles mudaram
+            COMPOSE_CHANGED=false
+            if echo "$CHANGED" | grep -qE '^docker-compose\.yml|^api/Dockerfile|^frontend/Dockerfile'; then
+              COMPOSE_CHANGED=true
+              echo "→ Mudanças detectadas no Docker Compose/Dockerfiles"
+            fi
+
+            echo "=== Aplicando atualizações ==="
+
+            if [ "$COMPOSE_CHANGED" = true ]; then
+              echo "→ Compose/Dockerfile mudou: rebuild completo com mínimo downtime"
+              docker compose pull --quiet 2>/dev/null || true
+              docker compose up -d --build --remove-orphans
+            else
+              if [ "$API_CHANGED" = true ]; then
+                echo "→ Rebuild apenas da API (outros containers continuam rodando)"
+                docker compose up -d --build --no-deps api
+              fi
+
+              if [ "$FRONT_CHANGED" = true ]; then
+                echo "→ Frontend usa volume — arquivos já sincronizados via rsync"
+                echo "→ Nenhum restart necessário para o frontend estático"
+                # Se o frontend tiver um processo de build (ex: npm build),
+                # descomente as linhas abaixo:
+                # docker compose exec frontend npm run build
+                # ou
+                # docker compose up -d --build --no-deps frontend
+              fi
+
+              if [ "$API_CHANGED" = false ] && [ "$FRONT_CHANGED" = false ]; then
+                echo "→ Nenhum serviço principal alterado. Garantindo que tudo está rodando..."
+                docker compose up -d
+              fi
+            fi
+
+            echo "=== Limpando imagens antigas ==="
+            docker image prune -f --filter "until=24h"
+
+            echo "=== Status dos containers ==="
+            docker compose ps
+
+            echo "=== Deploy concluído com sucesso! ==="
+          ENDSSH
+
+      # 6. Notifica em caso de falha (opcional — pode remover se não quiser)
+      - name: Notificar falha
+        if: failure()
+        run: |
+          echo "::error::Deploy falhou! Verifique os logs acima."
+          echo "Dica: conecte-se à VPS e rode 'docker compose logs' para diagnóstico."

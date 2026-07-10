@@ -1,0 +1,110 @@
+# .github/workflows/ci-lint.yml
+# Executa em todo Pull Request aberto contra a branch main.
+# Testa sintaxe/lint de: Docker, Python, JavaScript e JSON.
+
+name: CI — Lint e Validação
+
+on:
+  pull_request:
+    branches:
+      - main
+
+# Cancela runs anteriores do mesmo PR para economizar minutos gratuitos
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lint-ci:                          # ← Este nome deve bater com o "Status check" configurado na Branch Protection
+    name: Lint (Docker, Python, JS, JSON)
+    runs-on: ubuntu-latest
+
+    steps:
+      # 1. Faz checkout do código do PR
+      - name: Checkout do código
+        uses: actions/checkout@v4
+
+      # ─────────────────────────────────────────
+      # DOCKER LINT
+      # ─────────────────────────────────────────
+      - name: Instalar Hadolint (Dockerfile linter)
+        run: |
+          curl -sL https://github.com/hadolint/hadolint/releases/latest/download/hadolint-Linux-x86_64 \
+            -o /usr/local/bin/hadolint
+          chmod +x /usr/local/bin/hadolint
+
+      - name: Lint — Dockerfiles
+        run: |
+          # Encontra e valida todos os Dockerfiles no repositório
+          find . -name "Dockerfile*" -not -path "./.git/*" | while read f; do
+            echo "→ Validando: $f"
+            hadolint "$f"
+          done
+
+      # ─────────────────────────────────────────
+      # PYTHON LINT
+      # ─────────────────────────────────────────
+      - name: Configurar Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: "pip"
+
+      - name: Instalar ferramentas Python
+        run: pip install flake8 black
+
+      - name: Lint — Python (flake8)
+        run: |
+          # E501: ignora linhas longas (ajuste se quiser rigor)
+          flake8 . --count --select=E9,F63,F7,F82 --show-source --statistics
+          flake8 . --count --exit-zero --max-complexity=10 --max-line-length=120 --statistics
+
+      - name: Formato — Python (black --check)
+        run: black --check --diff .
+
+      # ─────────────────────────────────────────
+      # JAVASCRIPT LINT
+      # ─────────────────────────────────────────
+      - name: Configurar Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Instalar ESLint
+        run: npm install -g eslint
+
+      - name: Lint — JavaScript
+        run: |
+          # Verifica se existe algum .js para lintar antes de rodar
+          JS_FILES=$(find . -name "*.js" -not -path "./node_modules/*" -not -path "./.git/*")
+          if [ -z "$JS_FILES" ]; then
+            echo "Nenhum arquivo .js encontrado. Pulando ESLint."
+          else
+            echo "$JS_FILES" | xargs eslint --no-eslintrc -c '{"env":{"browser":true,"es2021":true},"rules":{"no-undef":"warn","no-unused-vars":"warn"}}'
+          fi
+
+      # ─────────────────────────────────────────
+      # JSON LINT
+      # ─────────────────────────────────────────
+      - name: Lint — JSON
+        run: |
+          JSON_FILES=$(find . -name "*.json" -not -path "./node_modules/*" -not -path "./.git/*")
+          if [ -z "$JSON_FILES" ]; then
+            echo "Nenhum arquivo .json encontrado. Pulando."
+          else
+            echo "$JSON_FILES" | while read f; do
+              echo "→ Validando: $f"
+              python -m json.tool "$f" > /dev/null && echo "  ✔ OK" || (echo "  ✘ INVÁLIDO: $f" && exit 1)
+            done
+          fi
+
+      # ─────────────────────────────────────────
+      # DOCKER COMPOSE VALIDATE
+      # ─────────────────────────────────────────
+      - name: Validar docker-compose.yml
+        run: |
+          # Verifica sintaxe do compose sem precisar de Docker daemon
+          docker compose config --quiet
+        env:
+          # Evita erros de variáveis não definidas durante a validação
+          COMPOSE_FILE: docker-compose.yml
