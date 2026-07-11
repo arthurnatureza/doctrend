@@ -46,13 +46,17 @@ jobs:
             --exclude='*.sqlite' \
             ./ ${{ secrets.VPS_USER }}@${{ secrets.VPS_HOST }}:${{ secrets.VPS_APP_PATH }}/
 
-      # 5. Deploy inteligente com zero downtime
-      #    Lógica:
-      #    - Detecta quais serviços tiveram arquivos alterados neste push
-      #    - Reinicia apenas o(s) container(s) necessário(s)
-      #    - Frontend usa volume → mudanças em arquivos estáticos refletem SEM reiniciar container
-      #    - API/Backend precisa de rebuild se código Python mudou
-      - name: Deploy inteligente (zero downtime)
+      # 5. Deploy: rebuild sempre.
+      #    O rsync exclui .git/ do destino, então não há histórico git na VPS
+      #    para detectar "o que mudou" — qualquer lógica baseada em `git log`
+      #    ali é ilusória (silenciosamente vira no-op depois do 1º deploy,
+      #    que só builda porque a imagem ainda não existe). Ambos os serviços
+      #    (api e frontend) copiam o código para dentro da imagem — não tem
+      #    bind-mount em produção — então rebuildar os dois a cada push é o
+      #    único jeito confiável de garantir que o código em produção bate
+      #    com o que está na main. Com cache de camadas do Docker, isso é
+      #    rápido quando só o código da aplicação mudou.
+      - name: Deploy (rebuild completo)
         run: |
           ssh ${{ secrets.VPS_USER }}@${{ secrets.VPS_HOST }} << 'ENDSSH'
             set -e
@@ -65,57 +69,8 @@ jobs:
               export $(grep -v '^#' .env | xargs)
             fi
 
-            echo "=== Detectando mudanças no último commit ==="
-            CHANGED=$(git log -1 --name-only --pretty=format: HEAD 2>/dev/null || echo "")
-
-            # Verifica se a API mudou
-            API_CHANGED=false
-            if echo "$CHANGED" | grep -qE '^api/'; then
-              API_CHANGED=true
-              echo "→ Mudanças detectadas na API"
-            fi
-
-            # Verifica se o Frontend mudou
-            FRONT_CHANGED=false
-            if echo "$CHANGED" | grep -qE '^frontend/'; then
-              FRONT_CHANGED=true
-              echo "→ Mudanças detectadas no Frontend"
-            fi
-
-            # Verifica se o docker-compose ou Dockerfiles mudaram
-            COMPOSE_CHANGED=false
-            if echo "$CHANGED" | grep -qE '^docker-compose\.yml|^api/Dockerfile|^frontend/Dockerfile'; then
-              COMPOSE_CHANGED=true
-              echo "→ Mudanças detectadas no Docker Compose/Dockerfiles"
-            fi
-
-            echo "=== Aplicando atualizações ==="
-
-            if [ "$COMPOSE_CHANGED" = true ]; then
-              echo "→ Compose/Dockerfile mudou: rebuild completo com mínimo downtime"
-              docker compose pull --quiet 2>/dev/null || true
-              docker compose up -d --build --remove-orphans
-            else
-              if [ "$API_CHANGED" = true ]; then
-                echo "→ Rebuild apenas da API (outros containers continuam rodando)"
-                docker compose up -d --build --no-deps api
-              fi
-
-              if [ "$FRONT_CHANGED" = true ]; then
-                echo "→ Frontend usa volume — arquivos já sincronizados via rsync"
-                echo "→ Nenhum restart necessário para o frontend estático"
-                # Se o frontend tiver um processo de build (ex: npm build),
-                # descomente as linhas abaixo:
-                # docker compose exec frontend npm run build
-                # ou
-                # docker compose up -d --build --no-deps frontend
-              fi
-
-              if [ "$API_CHANGED" = false ] && [ "$FRONT_CHANGED" = false ]; then
-                echo "→ Nenhum serviço principal alterado. Garantindo que tudo está rodando..."
-                docker compose up -d
-              fi
-            fi
+            echo "=== Rebuild e restart (api + frontend) ==="
+            docker compose up -d --build --remove-orphans
 
             echo "=== Limpando imagens antigas ==="
             docker image prune -f --filter "until=24h"
