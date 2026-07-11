@@ -11,6 +11,7 @@ import glob
 import sqlite3
 from pathlib import Path
 
+import altair as alt
 import pandas as pd
 import streamlit as st
 
@@ -22,6 +23,17 @@ SILVER_GLOB = str(DATALAKE / "silver" / "dominio=*" / "**" / "*.parquet")
 
 st.set_page_config(
     page_title="DocTrend — Insights de Saude", page_icon="🩺", layout="wide"
+)
+st.markdown(
+    """
+    <style>
+    html, body, [class^="st-"], [class*=" st-"] { font-size: 1.15rem; }
+    h1 { font-size: 2.4rem !important; }
+    h2, [data-testid="stMetricValue"] { font-size: 1.9rem !important; }
+    h3 { font-size: 1.6rem !important; }
+    </style>
+    """,
+    unsafe_allow_html=True,
 )
 
 
@@ -106,7 +118,20 @@ else:
 
     left, right = st.columns([2, 1])
     with left:
-        st.bar_chart(gold.set_index("termo")["mencoes"].sort_values(ascending=False))
+        chart_dados = gold.sort_values("mencoes", ascending=False)
+        chart = (
+            alt.Chart(chart_dados)
+            .mark_bar()
+            .encode(
+                x=alt.X("mencoes:Q", title="Menções"),
+                y=alt.Y("termo:N", sort="-x", title="Termo"),
+                tooltip=["termo", "mencoes", "videos"],
+            )
+            .properties(height=420)
+            .configure_axis(labelFontSize=16, titleFontSize=18)
+            .configure_tooltip(fontSize=16)
+        )
+        st.altair_chart(chart, use_container_width=True)
     with right:
         st.dataframe(
             gold.sort_values("mencoes", ascending=False).reset_index(drop=True),
@@ -142,23 +167,35 @@ if por_video.empty:
     st.info("Ainda sem métricas de vídeo coletadas.")
 else:
     top10 = por_video.head(10).copy()
-    data_pub = pd.to_datetime(top10["publicado_em"], errors="coerce").dt.strftime(
-        "%d/%m"
-    )
-    top10["rótulo"] = (
-        top10["titulo"].str.slice(0, 45) + " (" + data_pub.fillna("—") + ")"
-    )
-    st.bar_chart(top10.set_index("rótulo")["views_atual"])
+    publicado_em = pd.to_datetime(top10["publicado_em"], errors="coerce")
+    agora = pd.Timestamp.now(tz="UTC")
+    dias_atras = (agora - publicado_em).dt.days
+
+    for rank, row in enumerate(top10.itertuples(), start=1):
+        dias = dias_atras.iloc[rank - 1]
+        ha_quanto_tempo = (
+            f"há {int(dias)} dia(s)" if pd.notna(dias) else "data desconhecida"
+        )
+        st.markdown(
+            f"**{rank}. {row.titulo}** — {ha_quanto_tempo} — "
+            f"**{row.views_atual:,}** views"
+        )
 
 st.divider()
 st.subheader("📈 Velocidade de crescimento (views ao longo do tempo)")
-if snapshots.empty:
-    st.info("Ainda sem snapshots suficientes para montar curvas de crescimento.")
+# So mostra videos que ja tem pelo menos um termo do vocabulario identificado
+# (transcricao ou metadados) — sem isso o video nao tem o que analisar aqui.
+por_video_com_termo = por_video[por_video["video_id"].isin(video_termos["video_id"])]
+if por_video_com_termo.empty:
+    st.info(
+        "Ainda nenhum vídeo com termos do vocabulário identificados — "
+        "aguarde o próximo ciclo de coleta."
+    )
 else:
-    opcoes = por_video["video_id"].tolist()
+    opcoes = por_video_com_termo["video_id"].tolist()
     rotulos = {
         row.video_id: f"{row.titulo[:70]} — {row.views_atual:,} views ({row.n_coletas} coleta(s))"
-        for row in por_video.itertuples()
+        for row in por_video_com_termo.itertuples()
     }
     esquerda, direita = st.columns([2, 1])
     with esquerda:
