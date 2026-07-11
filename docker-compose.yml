@@ -16,6 +16,8 @@ services:
       - PYTHONUNBUFFERED=1
       - YOUTUBE_API_KEY=${YOUTUBE_API_KEY} # Vem do .env (nunca hardcoded)
       - ENVIRONMENT=${ENVIRONMENT:-production}
+      - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN:-}
+      - TELEGRAM_CHAT_ID=${TELEGRAM_CHAT_ID:-}
     volumes:
       - datalake_data:/app/datalake        # SQLite de controle + Parquet (bronze/silver/gold)
     networks:

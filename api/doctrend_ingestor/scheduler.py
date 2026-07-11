@@ -21,6 +21,7 @@ from apscheduler.triggers.interval import IntervalTrigger
 
 from .ingestor.state import StateStore
 from .ingestor.pipeline import rodar_ciclo
+from .notify import notificar_telegram
 
 logging.basicConfig(
     level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s"
@@ -35,11 +36,29 @@ def carregar_config() -> dict:
         return yaml.safe_load(f)
 
 
+def rodar_ciclo_notificado(canal: dict, glob_cfg: dict, store: StateStore) -> dict:
+    """Roda o ciclo normal e manda um resumo pro Telegram (se configurado).
+    Notificacao e best-effort: nunca impede o ciclo de rodar nem propaga erro
+    de rede do Telegram para o agendador."""
+    try:
+        res = rodar_ciclo(canal, glob_cfg, store)
+    except Exception as e:
+        notificar_telegram(f"🔴 DocTrend — {canal['nome']}: ciclo falhou — {e}")
+        raise
+    emoji = "✅" if res["falhas"] == 0 else "⚠️"
+    notificar_telegram(
+        f"{emoji} DocTrend — {res['canal']}\n"
+        f"descobertos={res['descobertos']} ingeridos={res['ingeridos']} "
+        f"falhas={res['falhas']} pulados={res['pulados_idempotencia']}"
+    )
+    return res
+
+
 def rodar_uma_vez(cfg: dict, store: StateStore):
     glob = cfg.get("global", {})
     for canal in cfg["canais"]:
         if canal.get("ativo", True):
-            rodar_ciclo(canal, glob, store)
+            rodar_ciclo_notificado(canal, glob, store)
 
 
 def main():
@@ -62,7 +81,7 @@ def main():
             continue
         intervalo = canal.get("intervalo_min", 60)
         sched.add_job(
-            rodar_ciclo,
+            rodar_ciclo_notificado,
             IntervalTrigger(minutes=intervalo),
             args=[canal, glob, store],
             id=canal["channel_id"],
