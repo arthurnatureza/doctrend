@@ -20,6 +20,7 @@ Rodar o mesmo ciclo duas vezes nao duplica dado.
 
 from __future__ import annotations
 import re
+import glob
 import logging
 from datetime import datetime, timezone
 from pathlib import Path
@@ -30,7 +31,7 @@ import pandera.pandas as pa
 from pandera.pandas import Column, DataFrameSchema, Check
 
 from .state import StateStore, content_hash
-from .discovery import get_discovery
+from .discovery import get_discovery, VideoMeta
 from .transcript import extrair_transcricao
 
 log = logging.getLogger("ingestor")
@@ -64,6 +65,18 @@ SILVER_SCHEMA = DataFrameSchema(
         "start": Column(float, Check.ge(0)),
         "duration": Column(float, Check.gt(0)),
         "n_palavras": Column(int, Check.ge(1)),
+    },
+    coerce=True,
+)
+
+# Contrato Silver dos metadados (titulo + descricao + tags). Persistido para
+# todo video descoberto, mesmo sem transcricao — assim o Gold ainda enxerga
+# algo sobre videos sem legenda disponivel.
+METADATA_SCHEMA = DataFrameSchema(
+    {
+        "video_id": Column(str, nullable=False),
+        "texto_limpo": Column(str, Check.str_length(min_value=0)),
+        "n_palavras": Column(int, Check.ge(0)),
     },
     coerce=True,
 )
@@ -102,27 +115,60 @@ def _persistir(df: pd.DataFrame, dominio: str, video_id: str):
     df.to_parquet(base / f"{video_id}.parquet", index=False)
 
 
+def _metadata_silver(v: VideoMeta) -> pd.DataFrame:
+    """Titulo + descricao + tags limpos — mesma limpeza da transcricao, so que
+    aplicada ao que a Data API ja devolve na descoberta (sem custo extra)."""
+    texto = " ".join([v.title or "", v.description or "", " ".join(v.tags or [])])
+    limpo = _limpar(texto)
+    n_palavras = len(limpo.split()) if limpo else 0
+    return METADATA_SCHEMA.validate(
+        pd.DataFrame(
+            [{"video_id": v.video_id, "texto_limpo": limpo, "n_palavras": n_palavras}]
+        )
+    )
+
+
+def _persistir_metadata(df: pd.DataFrame, dominio: str, video_id: str):
+    # Sem particao por dt=: e um "retrato atual" do video, nao um evento —
+    # sobrescreve no mesmo arquivo a cada ciclo em vez de acumular duplicata.
+    base = Path(f"./datalake/silver/dominio={dominio}/metadata")
+    base.mkdir(parents=True, exist_ok=True)
+    df.to_parquet(base / f"{video_id}.parquet", index=False)
+
+
 def _gold(dominio: str, vocabulario: list[str]):
     """Analitico do dominio: densidade de termos-alvo (doencas/temas de saude)
-    nas transcricoes, cruzado com o total de videos que citam cada termo."""
-    src = f"./datalake/silver/dominio={dominio}/**/*.parquet"
+    cruzando transcricao (Silver) e titulo/descricao/tags (metadados) — assim
+    videos sem legenda disponivel ainda contribuem com o que sabemos deles."""
+    fontes = []
+    if glob.glob(f"./datalake/silver/dominio={dominio}/dt=*/*.parquet"):
+        fontes.append(
+            "SELECT video_id, texto_limpo FROM read_parquet("
+            f"'./datalake/silver/dominio={dominio}/dt=*/*.parquet')"
+        )
+    if glob.glob(f"./datalake/silver/dominio={dominio}/metadata/*.parquet"):
+        fontes.append(
+            "SELECT video_id, texto_limpo FROM read_parquet("
+            f"'./datalake/silver/dominio={dominio}/metadata/*.parquet')"
+        )
+    if not fontes:
+        return pd.DataFrame()
+
     con = duckdb.connect()
     termos = "', '".join(vocabulario) if vocabulario else "x"
     try:
         gold = con.execute(f"""
-            WITH s AS (SELECT * FROM read_parquet('{src}')),
+            WITH textos AS ({" UNION ALL ".join(fontes)}),
                  alvo AS (SELECT UNNEST(['{termos}']) AS termo)
             SELECT a.termo, COUNT(*) AS mencoes,
-                   COUNT(DISTINCT s.video_id) AS videos
-            FROM s JOIN alvo a ON s.texto_limpo LIKE '%' || a.termo || '%'
+                   COUNT(DISTINCT textos.video_id) AS videos
+            FROM textos JOIN alvo a ON textos.texto_limpo LIKE '%' || a.termo || '%'
             GROUP BY a.termo ORDER BY mencoes DESC
         """).df()
         out = Path(f"./datalake/gold/dominio={dominio}")
         out.mkdir(parents=True, exist_ok=True)
         gold.to_parquet(out / "densidade_termos.parquet", index=False)
         return gold
-    except duckdb.IOException:
-        return pd.DataFrame()  # ainda sem dados silver
     finally:
         con.close()
 
@@ -152,14 +198,18 @@ def rodar_ciclo(canal: dict, glob_cfg: dict, store: StateStore) -> dict:
         max_pub = max(max_pub, v.published_at or "")
         novos += 1
 
-        trechos = extrair_transcricao(
+        # Titulo/descricao/tags: persiste sempre, mesmo se a transcricao
+        # falhar depois — assim o Gold enxerga algo de todo video descoberto.
+        _persistir_metadata(_metadata_silver(v), dom, v.video_id)
+
+        trechos, motivo_falha = extrair_transcricao(
             v.video_id,
             glob_cfg.get("idiomas_legenda", ["pt", "en"]),
             vocab,
             glob_cfg.get("modo_demo", True),
         )
         if not trechos:
-            store.marcar_falha(v.video_id, "sem legenda")
+            store.marcar_falha(v.video_id, motivo_falha or "sem legenda")
             falhas += 1
             continue
 

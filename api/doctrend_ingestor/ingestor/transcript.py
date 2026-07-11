@@ -36,17 +36,21 @@ def _sintetico(video_id: str, vocabulario: list[str], n=160) -> list[dict]:
 
 def extrair_transcricao(
     video_id: str, idiomas: list[str], vocabulario: list[str], modo_demo: bool
-) -> list[dict]:
+) -> tuple[list[dict], str | None]:
+    """Retorna (trechos, motivo_falha). motivo_falha e None em caso de sucesso —
+    diferenciar o motivo real (sem legenda, IP bloqueado, video indisponivel...)
+    importa para rastreabilidade (o pipeline nao deve mentir 'sem legenda' para
+    tudo que falhar)."""
     if modo_demo or video_id.startswith("demo_"):
-        return _sintetico(video_id, vocabulario)
+        return _sintetico(video_id, vocabulario), None
     try:
         from youtube_transcript_api import YouTubeTranscriptApi
 
         api = YouTubeTranscriptApi()  # API v1.x
         fetched = api.fetch(video_id, languages=idiomas)
-        return [
+        trechos = [
             {"text": s.text, "start": s.start, "duration": s.duration} for s in fetched
         ]
-    except Exception:
-        # video sem legenda: registra vazio para o pipeline marcar FAILED
-        return []
+        return trechos, None
+    except Exception as e:
+        return [], type(e).__name__
