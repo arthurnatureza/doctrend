@@ -87,7 +87,10 @@ def _limpar(texto: str) -> str:
     return " ".join(t for t in texto.split() if t not in STOPWORDS and len(t) > 2)
 
 
-def _bronze_silver(video_id, trechos) -> pd.DataFrame:
+def _bronze_silver(
+    video_id, trechos
+) -> tuple[pd.DataFrame | None, pd.DataFrame | None]:
+    """Retorna (df_valido, df_quarentena) — sempre um dos dois, nunca ambos."""
     df = pd.DataFrame(
         [
             {
@@ -103,9 +106,15 @@ def _bronze_silver(video_id, trechos) -> pd.DataFrame:
     df["texto_limpo"] = df["texto"].apply(_limpar)
     df = df[df["texto_limpo"].str.len() > 0].copy()
     df["n_palavras"] = df["texto_limpo"].str.split().str.len().fillna(0).astype(int)
-    return SILVER_SCHEMA.validate(
-        df[["video_id", "ordem", "texto_limpo", "start", "duration", "n_palavras"]]
-    )
+    candidato = df[
+        ["video_id", "ordem", "texto_limpo", "start", "duration", "n_palavras"]
+    ]
+    try:
+        return SILVER_SCHEMA.validate(candidato), None
+    except pa.errors.SchemaError as e:
+        quarentena = candidato.copy()
+        quarentena["motivo"] = str(e)[:300]
+        return None, quarentena
 
 
 def _persistir(df: pd.DataFrame, dominio: str, video_id: str):
@@ -115,17 +124,31 @@ def _persistir(df: pd.DataFrame, dominio: str, video_id: str):
     df.to_parquet(base / f"{video_id}.parquet", index=False)
 
 
-def _metadata_silver(v: VideoMeta) -> pd.DataFrame:
+def _persistir_quarentena(df: pd.DataFrame, dominio: str, video_id: str):
+    """Linhas que falharam o contrato Pandera vao pra ca em vez de sumir —
+    rastreabilidade exige saber o que foi descartado e por que (coluna 'motivo')."""
+    dia = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    base = Path(f"./datalake/silver/dominio={dominio}/_quarentena/dt={dia}")
+    base.mkdir(parents=True, exist_ok=True)
+    df.to_parquet(base / f"{video_id}.parquet", index=False)
+
+
+def _metadata_silver(v: VideoMeta) -> tuple[pd.DataFrame | None, pd.DataFrame | None]:
     """Titulo + descricao + tags limpos — mesma limpeza da transcricao, so que
-    aplicada ao que a Data API ja devolve na descoberta (sem custo extra)."""
+    aplicada ao que a Data API ja devolve na descoberta (sem custo extra).
+    Retorna (df_valido, df_quarentena) — sempre um dos dois, nunca ambos."""
     texto = " ".join([v.title or "", v.description or "", " ".join(v.tags or [])])
     limpo = _limpar(texto)
     n_palavras = len(limpo.split()) if limpo else 0
-    return METADATA_SCHEMA.validate(
-        pd.DataFrame(
-            [{"video_id": v.video_id, "texto_limpo": limpo, "n_palavras": n_palavras}]
-        )
+    candidato = pd.DataFrame(
+        [{"video_id": v.video_id, "texto_limpo": limpo, "n_palavras": n_palavras}]
     )
+    try:
+        return METADATA_SCHEMA.validate(candidato), None
+    except pa.errors.SchemaError as e:
+        quarentena = candidato.copy()
+        quarentena["motivo"] = str(e)[:300]
+        return None, quarentena
 
 
 def _persistir_metadata(df: pd.DataFrame, dominio: str, video_id: str):
@@ -200,7 +223,11 @@ def rodar_ciclo(canal: dict, glob_cfg: dict, store: StateStore) -> dict:
 
         # Titulo/descricao/tags: persiste sempre, mesmo se a transcricao
         # falhar depois — assim o Gold enxerga algo de todo video descoberto.
-        _persistir_metadata(_metadata_silver(v), dom, v.video_id)
+        meta_valida, meta_quarentena = _metadata_silver(v)
+        if meta_valida is not None:
+            _persistir_metadata(meta_valida, dom, v.video_id)
+        else:
+            _persistir_quarentena(meta_quarentena, dom, f"{v.video_id}_metadata")
 
         trechos, motivo_falha = extrair_transcricao(
             v.video_id,
@@ -219,11 +246,16 @@ def rodar_ciclo(canal: dict, glob_cfg: dict, store: StateStore) -> dict:
             pulados += 1
             continue
         try:
-            df = _bronze_silver(v.video_id, trechos)
-            _persistir(df, dom, v.video_id)
-            store.marcar_ingerido(v.video_id, h, len(df))
-            ingeridos += 1
-        except (pa.errors.SchemaError, Exception) as e:
+            df_valido, df_quarentena = _bronze_silver(v.video_id, trechos)
+            if df_valido is not None:
+                _persistir(df_valido, dom, v.video_id)
+                store.marcar_ingerido(v.video_id, h, len(df_valido))
+                ingeridos += 1
+            else:
+                _persistir_quarentena(df_quarentena, dom, v.video_id)
+                store.marcar_falha(v.video_id, "contrato Silver invalido (quarentena)")
+                falhas += 1
+        except Exception as e:
             store.marcar_falha(v.video_id, e)
             falhas += 1
 
