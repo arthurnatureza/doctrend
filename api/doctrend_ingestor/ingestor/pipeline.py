@@ -180,17 +180,30 @@ def _gold(dominio: str, vocabulario: list[str]):
     con = duckdb.connect()
     termos = "', '".join(vocabulario) if vocabulario else "x"
     try:
+        textos_cte = f"WITH textos AS ({' UNION ALL '.join(fontes)})"
+        out = Path(f"./datalake/gold/dominio={dominio}")
+        out.mkdir(parents=True, exist_ok=True)
+
         gold = con.execute(f"""
-            WITH textos AS ({" UNION ALL ".join(fontes)}),
+            {textos_cte},
                  alvo AS (SELECT UNNEST(['{termos}']) AS termo)
             SELECT a.termo, COUNT(*) AS mencoes,
                    COUNT(DISTINCT textos.video_id) AS videos
             FROM textos JOIN alvo a ON textos.texto_limpo LIKE '%' || a.termo || '%'
             GROUP BY a.termo ORDER BY mencoes DESC
         """).df()
-        out = Path(f"./datalake/gold/dominio={dominio}")
-        out.mkdir(parents=True, exist_ok=True)
         gold.to_parquet(out / "densidade_termos.parquet", index=False)
+
+        # Quebra por video: quais termos do vocabulario cada video aborda —
+        # usado no dashboard para mostrar os temas de um video especifico.
+        video_termos = con.execute(f"""
+            {textos_cte},
+                 alvo AS (SELECT UNNEST(['{termos}']) AS termo)
+            SELECT DISTINCT textos.video_id, a.termo
+            FROM textos JOIN alvo a ON textos.texto_limpo LIKE '%' || a.termo || '%'
+        """).df()
+        video_termos.to_parquet(out / "video_termos.parquet", index=False)
+
         return gold
     finally:
         con.close()
