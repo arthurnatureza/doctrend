@@ -1,5 +1,7 @@
 # DocTrend
 
+Equipe: Arthur Natureza, Eliak Lima, Raul Teles e Renan Madeira
+
 Projeto acadêmico da disciplina **Linguagem de Programação para Engenharia de Dados**
 (Pós-Graduação em Engenharia de Dados). Pipeline de dados que coleta vídeos, métricas
 e transcrições de canais de **Saúde** no YouTube para identificar quais doenças, sintomas
