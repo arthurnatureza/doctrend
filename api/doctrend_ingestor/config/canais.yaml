@@ -1,0 +1,36 @@
+# =============================================================================
+# Configuracao declarativa da ingestao perene — dominio Saude.
+# A FREQUENCIA de cada canal e decisao de NEGOCIO, nao de codigo.
+# Edite este arquivo para adicionar/remover canais sem tocar no codigo.
+# =============================================================================
+
+# Cada canal precisa do channel_id (UC...). Como descobrir:
+#   - abra o canal no YouTube > "Compartilhar canal" > "Copiar ID do canal"
+#   - ou rode: python -m doctrend_ingestor.scripts.resolver_handle @nomedocanal
+canais:
+
+  - nome: "Canal Demo - Saude"
+    channel_id: "UCDEMOSAUDE0000000000000"   # placeholder ate termos canais reais
+    dominio: "saude"
+    intervalo_min: 60
+    max_videos_por_ciclo: 5
+    vocabulario:
+      - "diabetes"
+      - "hipertensao"
+      - "colesterol"
+      - "ansiedade"
+      - "depressao"
+      - "obesidade"
+      - "emagrecimento"
+      - "insonia"
+      - "enxaqueca"
+      - "gastrite"
+    ativo: true
+
+# Parametros globais do ingestor
+global:
+  idiomas_legenda: ["pt", "pt-BR", "en"]
+  # Modo demo: ignora a API real e gera dados sinteticos deterministicos.
+  # Deixe true ate configurarmos canais reais de Saude com channel_id valido.
+  modo_demo: true
+  janela_descoberta_dias: 30   # so considera videos publicados nos ultimos N dias
