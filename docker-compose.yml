@@ -1,64 +1,58 @@
 # docker-compose.yml
-# Arquitetura: API (Python) + Frontend (Nginx) + SQLite via volume persistente
+# Arquitetura: api (ingestor perene, baseado no projeto_modelo do professor)
+# + frontend (dashboard Streamlit), lendo o mesmo datalake (SQLite de
+# controle + Parquet Bronze/Silver/Gold) via volume persistente.
 
 services:
 
-  # ── Banco de Dados (SQLite via volume) ──────────────────────────────────────
-  # SQLite não é um servidor — é um arquivo. O "serviço" aqui é apenas
-  # o volume compartilhado entre API e potencialmente o frontend.
-  # Não precisamos de um container separado para o SQLite.
-
-  # ── API Python ───────────────────────────────────────────────────────────────
+  # ── Ingestor (descoberta + transcrição + pipeline Bronze→Silver→Gold) ───────
   api:
     build:
       context: ./api
       dockerfile: Dockerfile
-    container_name: pipeline_api
+    container_name: doctrend_api
     restart: unless-stopped
     environment:
       - PYTHONUNBUFFERED=1
-      - DB_PATH=/data/pipeline.db          # Caminho do SQLite dentro do container
       - YOUTUBE_API_KEY=${YOUTUBE_API_KEY} # Vem do .env (nunca hardcoded)
+      - ENVIRONMENT=${ENVIRONMENT:-production}
     volumes:
-      - db_data:/data                      # Volume persistente para o SQLite
-      - ./api:/app                         # Hot-reload em dev (remova em prod se quiser imagem pura)
-    ports:
-      - "8000:8000"
+      - datalake_data:/app/datalake        # SQLite de controle + Parquet (bronze/silver/gold)
     networks:
-      - pipeline_net
+      - doctrend_net
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      test: ["CMD", "test", "-f", "/app/datalake/control/ingestion.db"]
       interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
 
-  # ── Frontend ─────────────────────────────────────────────────────────────────
+  # ── Dashboard (Streamlit, lê o mesmo datalake) ───────────────────────────────
   frontend:
     build:
       context: ./frontend
       dockerfile: Dockerfile
-    container_name: pipeline_frontend
+    container_name: doctrend_frontend
     restart: unless-stopped
     volumes:
-      - ./frontend:/usr/share/nginx/html   # Volume para refletir mudanças em tempo real
+      - datalake_data:/app/datalake:ro     # somente leitura — quem escreve é o api
     ports:
-      - "80:80"
+      - "80:8501"
     networks:
-      - pipeline_net
+      - doctrend_net
     depends_on:
       api:
         condition: service_healthy
 
 # ── Volumes Persistentes ─────────────────────────────────────────────────────
-# O volume db_data sobrevive a restarts e rebuilds de containers.
-# Para fazer backup: docker run --rm -v db_data:/data -v $(pwd):/backup \
-#                    alpine tar czf /backup/db_backup.tar.gz /data
+# O volume datalake_data sobrevive a restarts e rebuilds de containers.
+# Para fazer backup: docker run --rm -v datalake_data:/data -v $(pwd):/backup \
+#                    alpine tar czf /backup/datalake_backup.tar.gz /data
 volumes:
-  db_data:
+  datalake_data:
     driver: local
 
 # ── Rede Interna ─────────────────────────────────────────────────────────────
 networks:
-  pipeline_net:
+  doctrend_net:
     driver: bridge
