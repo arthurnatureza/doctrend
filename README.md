@@ -90,21 +90,67 @@ Depois é só `git commit` + `git push` + abrir PR + merge — o deploy acontece
 
 ## Rodando localmente
 
+> Rodar localmente (sua máquina, IP residencial) é útil não só para
+> desenvolvimento: como a `youtube_transcript_api` bloqueia IPs de
+> datacenter/VPS (ver seção acima), transcrições que falham na VPS podem
+> funcionar rodando daqui de casa. Pode valer usar isso pra mostrar
+> resultados com transcrição completa, e não só via metadados.
+
+### 1. Pré-requisitos
+
+- Docker + Docker Compose instalados ([docs oficiais](https://docs.docker.com/get-docker/)).
+- Git.
+
+### 2. Clonar e configurar
+
 ```bash
-cp .env.example .env   # preencha YOUTUBE_API_KEY (opcional — sem ela, so modo_demo funciona)
-docker compose up --build
+git clone git@github.com:arthurnatureza/doctrend.git
+cd doctrend
+cp .env.example .env
 ```
 
-| Serviço | URL |
-|---|---|
-| Dashboard | http://localhost |
-| Ingestor (sem porta exposta, roda em background) | — |
+Edite o `.env` e preencha pelo menos `YOUTUBE_API_KEY` (sem ela, só o
+`modo_demo: true` funciona — ver `api/doctrend_ingestor/config/canais.yaml`).
+`TELEGRAM_BOT_TOKEN`/`TELEGRAM_CHAT_ID` são opcionais — deixe em branco se não
+quiser notificação rodando local (evita duplicar aviso se a VPS já está
+notificando).
 
-Rodar um ciclo manual (sem esperar o agendamento):
+### 3. Subir os containers
 
 ```bash
-docker compose exec api python -m doctrend_ingestor.scheduler --once
-docker compose exec api python -m doctrend_ingestor.scheduler --status
+docker compose up --build -d
+docker compose ps          # confirma os dois containers "healthy"
+```
+
+| Serviço | URL local | O que é |
+|---|---|---|
+| Dashboard | **http://localhost** | abra no navegador — mesmo dashboard da VPS, com os dados coletados localmente |
+| Ingestor (`api`) | sem porta exposta, roda em background | consultar via `docker compose logs`/`exec`, ver abaixo |
+
+### 4. Rodar um ciclo manual (sem esperar o agendamento)
+
+```bash
+docker compose exec api python -m doctrend_ingestor.scheduler --once     # 1 ciclo em todos os canais ativos
+docker compose exec api python -m doctrend_ingestor.scheduler --status   # resumo do estado (INGESTED/FAILED/...)
+```
+
+Depois de rodar `--once`, recarregue http://localhost no navegador — o
+dashboard lê o mesmo volume que o ingestor acabou de escrever (cache de 60s,
+`ttl=60` no Streamlit; se não atualizar na hora, espere um pouco ou aperte
+"Rerun" no menu do Streamlit).
+
+### 5. Acompanhar logs
+
+```bash
+docker compose logs -f api        # ver os ciclos rodando em tempo real
+docker compose logs -f frontend   # logs do Streamlit
+```
+
+### 6. Parar / limpar
+
+```bash
+docker compose down          # para os containers, mantém os dados coletados (volume datalake_data)
+docker compose down -v       # também apaga o volume — recomeça do zero
 ```
 
 ## Mais documentação
