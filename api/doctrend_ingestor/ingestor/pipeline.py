@@ -130,7 +130,7 @@ def _gold(dominio: str, vocabulario: list[str]):
 def rodar_ciclo(canal: dict, glob_cfg: dict, store: StateStore) -> dict:
     """Executa um ciclo completo de ingestao para um canal. Idempotente."""
     cid, dom = canal["channel_id"], canal["dominio"]
-    vocab = canal.get("vocabulario", [])
+    vocab = canal.get("vocabulario") or glob_cfg.get("vocabulario", [])
     disc = get_discovery(glob_cfg.get("modo_demo", True))
 
     watermark = store.get_watermark(cid)
