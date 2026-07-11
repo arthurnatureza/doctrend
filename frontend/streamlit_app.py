@@ -171,12 +171,20 @@ else:
         columns=["video_id", "titulo", "views_atual", "n_coletas", "publicado_em"]
     )
 
+# Só considera vídeos que já têm pelo menos um termo do vocabulário
+# identificado (transcrição ou metadados) — sem isso não há o que analisar.
+por_video_com_termo = por_video[por_video["video_id"].isin(video_termos["video_id"])]
+
 st.divider()
 st.subheader("🏆 Top 10 vídeos por visualizações")
-if por_video.empty:
-    st.info("Ainda sem métricas de vídeo coletadas.")
+st.caption("Apenas vídeos com algum tema do vocabulário identificado.")
+if por_video_com_termo.empty:
+    st.info(
+        "Ainda nenhum vídeo com termos do vocabulário identificados — "
+        "aguarde o próximo ciclo de coleta."
+    )
 else:
-    top10 = por_video.head(10).copy()
+    top10 = por_video_com_termo.head(10).copy()
     publicado_em = pd.to_datetime(top10["publicado_em"], errors="coerce")
     agora = pd.Timestamp.now(tz="UTC")
     dias_atras = (agora - publicado_em).dt.days
@@ -193,9 +201,6 @@ else:
 
 st.divider()
 st.subheader("📈 Velocidade de crescimento (views ao longo do tempo)")
-# Só mostra vídeos que já têm pelo menos um termo do vocabulário identificado
-# (transcrição ou metadados) — sem isso o vídeo não tem o que analisar aqui.
-por_video_com_termo = por_video[por_video["video_id"].isin(video_termos["video_id"])]
 if por_video_com_termo.empty:
     st.info(
         "Ainda nenhum vídeo com termos do vocabulário identificados — "
