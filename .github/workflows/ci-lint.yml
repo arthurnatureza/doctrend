@@ -44,11 +44,12 @@ jobs:
       # ─────────────────────────────────────────
       # PYTHON LINT
       # ─────────────────────────────────────────
+      # Nota: cache: "pip" removido intencionalmente.
+      # Reativar somente após api/requirements.txt existir no repositório.
       - name: Configurar Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v5.6.0
         with:
           python-version: "3.12"
-          cache: "pip"
 
       - name: Instalar ferramentas Python
         run: pip install flake8 black
@@ -66,7 +67,7 @@ jobs:
       # JAVASCRIPT LINT
       # ─────────────────────────────────────────
       - name: Configurar Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v4.4.0
         with:
           node-version: "20"
 
