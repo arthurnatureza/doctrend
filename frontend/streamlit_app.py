@@ -1,19 +1,22 @@
 # -*- coding: utf-8 -*-
-"""Dashboard DocTrend — insights de engajamento por tema de saude no YouTube.
+"""Dashboard DocTrend — insights de engajamento por tema de saúde no YouTube.
 
-Le direto do datalake gerado pelo ingestor (api/): Gold (Parquet, densidade de
+Lê direto do datalake gerado pelo ingestor (api/): Gold (Parquet, densidade de
 termos) e o estado de controle (SQLite: watermark, contagem por status,
-snapshots de metricas ao longo do tempo).
+snapshots de métricas ao longo do tempo).
 """
 
 from __future__ import annotations
 import glob
 import sqlite3
+from datetime import timedelta, timezone
 from pathlib import Path
 
 import altair as alt
 import pandas as pd
 import streamlit as st
+
+BRT = timezone(timedelta(hours=-3))  # Brasília não observa horário de verão desde 2019
 
 DATALAKE = Path("./datalake")
 CONTROL_DB = DATALAKE / "control" / "ingestion.db"
@@ -22,7 +25,7 @@ VIDEO_TERMOS_GLOB = str(DATALAKE / "gold" / "dominio=*" / "video_termos.parquet"
 SILVER_GLOB = str(DATALAKE / "silver" / "dominio=*" / "**" / "*.parquet")
 
 st.set_page_config(
-    page_title="DocTrend — Insights de Saude", page_icon="🩺", layout="wide"
+    page_title="DocTrend — Insights de Saúde", page_icon="🩺", layout="wide"
 )
 st.markdown(
     """
@@ -88,32 +91,40 @@ resumo = estado["resumo"]
 watermarks = estado["watermarks"]
 snapshots = estado["snapshots"]
 
-st.title("🩺 DocTrend — Temas de Saude em Alta no YouTube")
+st.title("🩺 DocTrend — Temas de Saúde em Alta no YouTube")
 st.caption(
-    "Quais doencas e temas de saude mais aparecem nas transcricoes dos "
+    "Quais doenças e temas de saúde mais aparecem nas transcrições dos "
     "principais canais — e quais geram mais engajamento."
 )
 
 ultima_atualizacao = watermarks["last_run_at"].max() if not watermarks.empty else None
+if ultima_atualizacao:
+    ultima_atualizacao_brt = (
+        pd.to_datetime(ultima_atualizacao, utc=True)
+        .tz_convert(BRT)
+        .strftime("%d/%m %H:%M")
+    )
+else:
+    ultima_atualizacao_brt = "—"
 
 col1, col2, col3, col4 = st.columns(4)
-col1.metric("Videos ingeridos", int(resumo.get("INGESTED", 0)))
-col2.metric("Videos descobertos", sum(resumo.values()) if resumo else 0)
+col1.metric("Vídeos ingeridos", int(resumo.get("INGESTED", 0)))
+col2.metric("Vídeos descobertos", sum(resumo.values()) if resumo else 0)
 col3.metric("Falhas (sem legenda etc.)", int(resumo.get("FAILED", 0)))
-col4.metric("Ultima coleta", ultima_atualizacao[:16] if ultima_atualizacao else "—")
+col4.metric("Última coleta (BRT, UTC-3)", ultima_atualizacao_brt)
 
 st.divider()
 
 if gold.empty:
     st.info(
         "Ainda sem dados no Gold. Rode `python -m doctrend_ingestor.scheduler "
-        "--once` no container `api` (ou aguarde o proximo ciclo agendado)."
+        "--once` no container `api` (ou aguarde o próximo ciclo agendado)."
     )
 else:
     termo_top = gold.sort_values("mencoes", ascending=False).iloc[0]
     st.subheader(f"🔥 Tema mais mencionado: **{termo_top['termo']}**")
     st.caption(
-        f"{int(termo_top['mencoes'])} mencoes em {int(termo_top['videos'])} videos distintos"
+        f"{int(termo_top['mencoes'])} menções em {int(termo_top['videos'])} vídeos distintos"
     )
 
     left, right = st.columns([2, 1])
@@ -129,13 +140,12 @@ else:
             )
             .properties(height=420)
             .configure_axis(labelFontSize=16, titleFontSize=18)
-            .configure_tooltip(fontSize=16)
         )
-        st.altair_chart(chart, use_container_width=True)
+        st.altair_chart(chart, width="stretch")
     with right:
         st.dataframe(
             gold.sort_values("mencoes", ascending=False).reset_index(drop=True),
-            use_container_width=True,
+            width="stretch",
         )
 
 if not snapshots.empty:
@@ -183,8 +193,8 @@ else:
 
 st.divider()
 st.subheader("📈 Velocidade de crescimento (views ao longo do tempo)")
-# So mostra videos que ja tem pelo menos um termo do vocabulario identificado
-# (transcricao ou metadados) — sem isso o video nao tem o que analisar aqui.
+# Só mostra vídeos que já têm pelo menos um termo do vocabulário identificado
+# (transcrição ou metadados) — sem isso o vídeo não tem o que analisar aqui.
 por_video_com_termo = por_video[por_video["video_id"].isin(video_termos["video_id"])]
 if por_video_com_termo.empty:
     st.info(
@@ -234,10 +244,10 @@ else:
 st.divider()
 with st.expander("Como interpretar"):
     st.markdown(
-        "- **Mencoes**: quantas vezes o termo aparece nas transcricoes limpas "
-        "(camada Silver) dos videos coletados.\n"
-        "- **Videos**: quantos videos distintos citam o termo pelo menos uma vez.\n"
-        "- **Velocidade**: cada coleta grava um snapshot de views/likes do video; "
-        "comparando snapshots (D-1, D+7, D+15...) da pra ver se um tema esta "
-        "ganhando ou perdendo tracao."
+        "- **Menções**: quantas vezes o termo aparece nas transcrições limpas "
+        "(camada Silver) dos vídeos coletados.\n"
+        "- **Vídeos**: quantos vídeos distintos citam o termo pelo menos uma vez.\n"
+        "- **Velocidade**: cada coleta grava um snapshot de views/likes do vídeo; "
+        "comparando snapshots (D-1, D+7, D+15...) dá pra ver se um tema está "
+        "ganhando ou perdendo tração."
     )
