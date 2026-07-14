@@ -88,8 +88,7 @@ def main():
             name=canal["nome"],
             max_instances=1,
             coalesce=True,  # nao acumula execucoes atrasadas
-            next_run_time=None,
-        )  # primeira corrida no 1o intervalo
+        )  # IntervalTrigger ja agenda a 1a corrida em agora + intervalo
 
         log.info("agendado: %s a cada %d min", canal["nome"], intervalo)
 
