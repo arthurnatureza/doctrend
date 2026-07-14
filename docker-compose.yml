@@ -38,8 +38,8 @@ services:
     restart: unless-stopped
     volumes:
       - datalake_data:/app/datalake:ro     # somente leitura — quem escreve é o api
-    ports:
-      - "80:8501"
+    expose:
+      - "8501"
     networks:
       - doctrend_net
     depends_on:
