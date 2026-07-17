@@ -11,6 +11,7 @@ Uso:
 """
 
 from __future__ import annotations
+import os
 import sys
 import logging
 from pathlib import Path
@@ -29,6 +30,7 @@ logging.basicConfig(
 log = logging.getLogger("scheduler")
 
 CONFIG = Path(__file__).parent / "config" / "canais.yaml"
+DEPLOY_LABEL = os.getenv("DEPLOY_LABEL", "dev")
 
 
 def carregar_config() -> dict:
@@ -43,11 +45,13 @@ def rodar_ciclo_notificado(canal: dict, glob_cfg: dict, store: StateStore) -> di
     try:
         res = rodar_ciclo(canal, glob_cfg, store)
     except Exception as e:
-        notificar_telegram(f"🔴 DocTrend — {canal['nome']}: ciclo falhou — {e}")
+        notificar_telegram(
+            f"🔴 DocTrend [{DEPLOY_LABEL}] — {canal['nome']}: ciclo falhou — {e}"
+        )
         raise
     emoji = "✅" if res["falhas"] == 0 else "⚠️"
     notificar_telegram(
-        f"{emoji} DocTrend — {res['canal']}\n"
+        f"{emoji} DocTrend [{DEPLOY_LABEL}] — {res['canal']}\n"
         f"descobertos={res['descobertos']} ingeridos={res['ingeridos']} "
         f"falhas={res['falhas']} pulados={res['pulados_idempotencia']}"
     )
@@ -91,6 +95,9 @@ def main():
         )  # IntervalTrigger ja agenda a 1a corrida em agora + intervalo
 
         log.info("agendado: %s a cada %d min", canal["nome"], intervalo)
+
+    log.info("Rodando 1o ciclo imediatamente (nao esperar o 1o intervalo)...")
+    rodar_uma_vez(cfg, store)
 
     log.info("Ingestor perene iniciado. Ctrl+C para encerrar.")
     try:

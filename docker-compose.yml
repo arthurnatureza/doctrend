@@ -18,6 +18,7 @@ services:
       - ENVIRONMENT=${ENVIRONMENT:-production}
       - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN:-}
       - TELEGRAM_CHAT_ID=${TELEGRAM_CHAT_ID:-}
+      - DEPLOY_LABEL=${DEPLOY_LABEL:-dev} # identifica o ambiente nas msgs do Telegram/rodape
     volumes:
       - datalake_data:/app/datalake        # SQLite de controle + Parquet (bronze/silver/gold)
     networks:
@@ -36,6 +37,9 @@ services:
       dockerfile: Dockerfile
     container_name: doctrend_frontend
     restart: unless-stopped
+    environment:
+      - DEPLOY_LABEL=${DEPLOY_LABEL:-dev}
+      - APP_VERSION=${APP_VERSION:-0.0}
     volumes:
       - datalake_data:/app/datalake:ro     # somente leitura — quem escreve é o api
     expose:
