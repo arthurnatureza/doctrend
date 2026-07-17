@@ -19,6 +19,13 @@ import streamlit as st
 
 BRT = timezone(timedelta(hours=-3))  # Brasília não observa horário de verão desde 2019
 
+# Versionado no arquivo VERSION (commitado junto do código, não como env var
+# separada) — assim uma unica alteração no repo já reflete em todo deploy.
+try:
+    APP_VERSION = (Path(__file__).parent / "VERSION").read_text().strip()
+except FileNotFoundError:
+    APP_VERSION = "0.0"
+
 DATALAKE = Path("./datalake")
 CONTROL_DB = DATALAKE / "control" / "ingestion.db"
 GOLD_GLOB = str(DATALAKE / "gold" / "dominio=*" / "densidade_termos.parquet")
@@ -259,4 +266,4 @@ with st.expander("Como interpretar"):
     )
 
 st.divider()
-st.caption(f"{os.getenv('DEPLOY_LABEL', 'dev')} · v{os.getenv('APP_VERSION', '0.0')}")
+st.caption(f"{os.getenv('DEPLOY_LABEL', 'dev')} · v{APP_VERSION}")
