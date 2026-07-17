@@ -8,6 +8,7 @@ snapshots de métricas ao longo do tempo).
 
 from __future__ import annotations
 import glob
+import os
 import sqlite3
 from datetime import timedelta, timezone
 from pathlib import Path
@@ -256,3 +257,6 @@ with st.expander("Como interpretar"):
         "comparando snapshots (D-1, D+7, D+15...) dá pra ver se um tema está "
         "ganhando ou perdendo tração."
     )
+
+st.divider()
+st.caption(f"{os.getenv('DEPLOY_LABEL', 'dev')} · v{os.getenv('APP_VERSION', '0.0')}")
