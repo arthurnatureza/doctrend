@@ -39,7 +39,6 @@ services:
     restart: unless-stopped
     environment:
       - DEPLOY_LABEL=${DEPLOY_LABEL:-dev}
-      - APP_VERSION=${APP_VERSION:-0.0}
     volumes:
       - datalake_data:/app/datalake:ro     # somente leitura — quem escreve é o api
     ports:
